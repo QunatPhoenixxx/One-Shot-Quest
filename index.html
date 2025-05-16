@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>One Shot Quest - Browser Edition</title>
+<style>
+  body { margin:0; background:#eee; overflow:hidden; }
+  canvas { background:#fff; display:block; margin:0 auto; }
+  #msg {
+    position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+    font-family: monospace; font-weight: bold; font-size: 24px; color: green;
+  }
+</style>
+</head>
+<body>
+<div id="msg"></div>
+<canvas id="game" width="400" height="600"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // Player properties
+  const player = {
+    x: W/2 - 15,
+    y: H - 80,
+    width: 30,
+    height: 60,
+    speed: 5,
+    colorBody: 'white',
+    colorHead: 'black',
+    canShoot: true,
+    shootCooldown: 500, // ms
+    lastShot: 0,
+  };
+
+  // GF properties (reward)
+  const gf = {
+    x: W/2 - 15,
+    y: 50,
+    width: 30,
+    height: 70,
+    colorBody: 'pink',
+    colorHead: 'black',
+    visible: false,
+  };
+
+  // Enemy template
+  function createEnemy(level) {
+    const baseHP = 10 + Math.floor(level/10)*3;
+    return {
+      x: W/2 - 40,
+      y: 50,
+      width: 80,
+      height: 50,
+      speed: 1 + level*0.03,
+      hp: baseHP,
+      maxHp: baseHP,
+      level: level,
+      shootInterval: 1500 - Math.min(level*10, 1000),
+      lastShot: 0,
+      colorBody: `rgb(${50 + (level*2)%205},${100},${150})`,
+      colorHead: `rgb(${50 + (level*2)%205},${50},${50})`,
+      direction: 1,
+    };
+  }
+
+  let enemy = createEnemy(1);
+  let bullets = [];
+  let enemyBullets = [];
+  let lives = 3;
+  let level = 1;
+  let msgEl = document.getElementById('msg');
+  let gameOver = false;
+  let win = false;
+
+  // Controls
+  const keys = {};
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+  });
+  window.addEventListener('keyup', e => {
+    keys[e.key.toLowerCase()] = false;
+  });
+
+  // Shoot bullet
+  function shoot(x, y, speedY, fromEnemy=false) {
+    bullets.push({x: x, y: y, w: 6, h: 10, speedY: speedY, fromEnemy});
+  }
+
+  // Collision helper
+  function rectIntersect(r1, r2) {
+    return !(r2.x > r1.x + r1.width || 
+             r2.x + r2.width < r1.x || 
+             r2.y > r1.y + r1.height ||
+             r2.y + r2.height < r1.y);
+  }
+
+  function resetEnemy() {
+    enemy = createEnemy(level);
+  }
+
+  function showMessage(text, color='green') {
+    msgEl.textContent = text;
+    msgEl.style.color = color;
+    setTimeout(() => { if (!win && !gameOver) msgEl.textContent = ''; }, 2000);
+  }
+
+  function nextLevel() {
+    level++;
+    if (level > 100) {
+      // Show GF & Win
+      gf.visible = true;
+      showMessage('YOU WIN!!!', 'purple');
+      win = true;
+    } else {
+      resetEnemy();
+      showMessage(`Level ${level}`, 'blue');
+    }
+  }
+
+  function loseLife() {
+    lives--;
+    if (lives <= 0) {
+      lives = 3;
+      level = Math.max(1, level - 10);
+      resetEnemy();
+      showMessage('You lost 3 lives! Back 10 levels!', 'red');
+    } else {
+      showMessage(`Lives left: ${lives}`, 'orange');
+    }
+  }
+
+  function update(dt) {
+    if (gameOver || win) return;
+
+    // Move player
+    if (keys['a'] && player.x > 0) player.x -= player.speed;
+    if (keys['d'] && player.x + player.width < W) player.x += player.speed;
+    if (keys['w'] && player.y > 0) player.y -= player.speed;
+    if (keys['s'] && player.y + player.height < H) player.y += player.speed;
+
+    // Player shoot
+    if (keys['k'] && player.canShoot) {
+      let now = Date.now();
+      if (now - player.lastShot >= player.shootCooldown) {
+        shoot(player.x + player.width/2 - 3, player.y, -7);
+        player.lastShot = now;
+      }
+    }
+
+    // Enemy AI: move toward player
+    if (enemy.x + enemy.width/2 < player.x + player.width/2) {
+      enemy.x += enemy.speed * dt/16;
+    } else if (enemy.x + enemy.width/2 > player.x + player.width/2) {
+      enemy.x -= enemy.speed * dt/16;
+    }
+
+    // Enemy shoot
+    let now = Date.now();
+    if (now - enemy.lastShot >= enemy.shootInterval) {
+      enemyBullets.push({
+        x: enemy.x + enemy.width/2 - 3,
+        y: enemy.y + enemy.height,
+        w: 6,
+        h: 10,
+        speedY: 5,
+      });
+      enemy.lastShot = now;
+    }
+
+    // Update bullets
+    bullets = bullets.filter(b => {
+      b.y += b.speedY * dt/16;
+      if (b.y < 0) return false;
+
+      // Check collision with enemy
+      if (!b.fromEnemy) {
+        if (rectIntersect(b, enemy)) {
+          enemy.hp--;
+          return false;
+        }
+      }
+      return true;
+    });
+
+    enemyBullets = enemyBullets.filter(b => {
+      b.y += b.speedY * dt/16;
+      if (b.y > H) return false;
+
+      // Check collision with player
+      if (rectIntersect(b, player)) {
+        loseLife();
+        return false;
+      }
+      return true;
+    });
+
+    // Check enemy HP
+    if (enemy.hp <= 0) {
+      if (level === 100) {
+        // final boss dead, show win
+        gf.visible = true;
+        showMessage('YOU WIN!!!', 'purple');
+        win = true;
+      } else {
+        nextLevel();
+      }
+    }
+
+    // Check player touching enemy (1 hit kill)
+    if (rectIntersect(player, enemy)) {
+      loseLife();
+    }
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    // Draw player (rectangle with black head)
+    ctx.fillStyle = 'white';
+    ctx.fillRect(player.x, player.y, player.width, player.height);
+    ctx.fillStyle = player.colorHead;
+    ctx.fillRect(player.x, player.y, player.width, player.height/3);
+
+    // Draw GF if visible
+    if (gf.visible) {
+      ctx.fillStyle = gf.colorBody;
+      ctx.fillRect(gf.x, gf.y, gf.width, gf.height);
+      ctx.fillStyle = gf.colorHead;
+      ctx.fillRect(gf.x, gf.y, gf.width, gf.height * 0.5);
+    }
+
+    // Draw enemy (bigger, rounder rectangle with colored body + darker head)
+    ctx.fillStyle = enemy.colorBody;
+    ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+    ctx.fillStyle = enemy.colorHead;
+    ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height / 2);
+
+    // Draw bullets
+    ctx.fillStyle = 'black';
+    bullets.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
+    ctx.fillStyle = 'red';
+    enemyBullets.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
+
+    // Draw HUD
+    ctx.fillStyle = 'black';
+    ctx.font = '16px monospace';
+    ctx.fillText(`Level: ${level}`, 10, 20);
+    ctx.fillText(`Lives: ${lives}`, 10, 40);
+  }
+
+  let lastTime = 0;
+  function loop(timestamp=0) {
+    if (!lastTime) lastTime = timestamp;
+    const dt = timestamp - lastTime;
+    lastTime = timestamp;
+
+    update(dt);
+    draw();
+    if (!gameOver && !win) requestAnimationFrame(loop);
+  }
+
+  showMessage('Level 1', 'blue');
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html><!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>One Shot Quest - Browser Edition</title>
+<style>
+  body { margin:0; background:#eee; overflow:hidden; }
+  canvas { background:#fff; display:block; margin:0 auto; }
+  #msg {
+    position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+    font-family: monospace; font-weight: bold; font-size: 24px; color: green;
+  }
+</style>
+</head>
+<body>
+<div id="msg"></div>
+<canvas id="game" width="400" height="600"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // Player properties
+  const player = {
+    x: W/2 - 15,
+    y: H - 80,
+    width: 30,
+    height: 60,
+    speed: 5,
+    colorBody: 'white',
+    colorHead: 'black',
+    canShoot: true,
+    shootCooldown: 500, // ms
+    lastShot: 0,
+  };
+
+  // GF properties (reward)
+  const gf = {
+    x: W/2 - 15,
+    y: 50,
+    width: 30,
+    height: 70,
+    colorBody: 'pink',
+    colorHead: 'black',
+    visible: false,
+  };
+
+  // Enemy template
+  function createEnemy(level) {
+    const baseHP = 10 + Math.floor(level/10)*3;
+    return {
+      x: W/2 - 40,
+      y: 50,
+      width: 80,
+      height: 50,
+      speed: 1 + level*0.03,
+      hp: baseHP,
+      maxHp: baseHP,
+      level: level,
+      shootInterval: 1500 - Math.min(level*10, 1000),
+      lastShot: 0,
+      colorBody: `rgb(${50 + (level*2)%205},${100},${150})`,
+      colorHead: `rgb(${50 + (level*2)%205},${50},${50})`,
+      direction: 1,
+    };
+  }
+
+  let enemy = createEnemy(1);
+  let bullets = [];
+  let enemyBullets = [];
+  let lives = 3;
+  let level = 1;
+  let msgEl = document.getElementById('msg');
+  let gameOver = false;
+  let win = false;
+
+  // Controls
+  const keys = {};
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+  });
+  window.addEventListener('keyup', e => {
+    keys[e.key.toLowerCase()] = false;
+  });
+
+  // Shoot bullet
+  function shoot(x, y, speedY, fromEnemy=false) {
+    bullets.push({x: x, y: y, w: 6, h: 10, speedY: speedY, fromEnemy});
+  }
+
+  // Collision helper
+  function rectIntersect(r1, r2) {
+    return !(r2.x > r1.x + r1.width || 
+             r2.x + r2.width < r1.x || 
+             r2.y > r1.y + r1.height ||
+             r2.y + r2.height < r1.y);
+  }
+
+  function resetEnemy() {
+    enemy = createEnemy(level);
+  }
+
+  function showMessage(text, color='green') {
+    msgEl.textContent = text;
+    msgEl.style.color = color;
+    setTimeout(() => { if (!win && !gameOver) msgEl.textContent = ''; }, 2000);
+  }
+
+  function nextLevel() {
+    level++;
+    if (level > 100) {
+      // Show GF & Win
+      gf.visible = true;
+      showMessage('YOU WIN!!!', 'purple');
+      win = true;
+    } else {
+      resetEnemy();
+      showMessage(`Level ${level}`, 'blue');
+    }
+  }
+
+  function loseLife() {
+    lives--;
+    if (lives <= 0) {
+      lives = 3;
+      level = Math.max(1, level - 10);
+      resetEnemy();
+      showMessage('You lost 3 lives! Back 10 levels!', 'red');
+    } else {
+      showMessage(`Lives left: ${lives}`, 'orange');
+    }
+  }
+
+  function update(dt) {
+    if (gameOver || win) return;
+
+    // Move player
+    if (keys['a'] && player.x > 0) player.x -= player.speed;
+    if (keys['d'] && player.x + player.width < W) player.x += player.speed;
+    if (keys['w'] && player.y > 0) player.y -= player.speed;
+    if (keys['s'] && player.y + player.height < H) player.y += player.speed;
+
+    // Player shoot
+    if (keys['k'] && player.canShoot) {
+      let now = Date.now();
+      if (now - player.lastShot >= player.shootCooldown) {
+        shoot(player.x + player.width/2 - 3, player.y, -7);
+        player.lastShot = now;
+      }
+    }
+
+    // Enemy AI: move toward player
+    if (enemy.x + enemy.width/2 < player.x + player.width/2) {
+      enemy.x += enemy.speed * dt/16;
+    } else if (enemy.x + enemy.width/2 > player.x + player.width/2) {
+      enemy.x -= enemy.speed * dt/16;
+    }
+
+    // Enemy shoot
+    let now = Date.now();
+    if (now - enemy.lastShot >= enemy.shootInterval) {
+      enemyBullets.push({
+        x: enemy.x + enemy.width/2 - 3,
+        y: enemy.y + enemy.height,
+        w: 6,
+        h: 10,
+        speedY: 5,
+      });
+      enemy.lastShot = now;
+    }
+
+    // Update bullets
+    bullets = bullets.filter(b => {
+      b.y += b.speedY * dt/16;
+      if (b.y < 0) return false;
+
+      // Check collision with enemy
+      if (!b.fromEnemy) {
+        if (rectIntersect(b, enemy)) {
+          enemy.hp--;
+          return false;
+        }
+      }
+      return true;
+    });
+
+    enemyBullets = enemyBullets.filter(b => {
+      b.y += b.speedY * dt/16;
+      if (b.y > H) return false;
+
+      // Check collision with player
+      if (rectIntersect(b, player)) {
+        loseLife();
+        return false;
+      }
+      return true;
+    });
+
+    // Check enemy HP
+    if (enemy.hp <= 0) {
+      if (level === 100) {
+        // final boss dead, show win
+        gf.visible = true;
+        showMessage('YOU WIN!!!', 'purple');
+        win = true;
+      } else {
+        nextLevel();
+      }
+    }
+
+    // Check player touching enemy (1 hit kill)
+    if (rectIntersect(player, enemy)) {
+      loseLife();
+    }
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    // Draw player (rectangle with black head)
+    ctx.fillStyle = 'white';
+    ctx.fillRect(player.x, player.y, player.width, player.height);
+    ctx.fillStyle = player.colorHead;
+    ctx.fillRect(player.x, player.y, player.width, player.height/3);
+
+    // Draw GF if visible
+    if (gf.visible) {
+      ctx.fillStyle = gf.colorBody;
+      ctx.fillRect(gf.x, gf.y, gf.width, gf.height);
+      ctx.fillStyle = gf.colorHead;
+      ctx.fillRect(gf.x, gf.y, gf.width, gf.height * 0.5);
+    }
+
+    // Draw enemy (bigger, rounder rectangle with colored body + darker head)
+    ctx.fillStyle = enemy.colorBody;
+    ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+    ctx.fillStyle = enemy.colorHead;
+    ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height / 2);
+
+    // Draw bullets
+    ctx.fillStyle = 'black';
+    bullets.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
+    ctx.fillStyle = 'red';
+    enemyBullets.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
+
+    // Draw HUD
+    ctx.fillStyle = 'black';
+    ctx.font = '16px monospace';
+    ctx.fillText(`Level: ${level}`, 10, 20);
+    ctx.fillText(`Lives: ${lives}`, 10, 40);
+  }
+
+  let lastTime = 0;
+  function loop(timestamp=0) {
+    if (!lastTime) lastTime = timestamp;
+    const dt = timestamp - lastTime;
+    lastTime = timestamp;
+
+    update(dt);
+    draw();
+    if (!gameOver && !win) requestAnimationFrame(loop);
+  }
+
+  showMessage('Level 1', 'blue');
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
